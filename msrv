@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+
+set -eo pipefail
+
+srv=$1
+port=$2
+
+tun_dev=tun0
+
+function validate_port {
+    re='^[0-9]+$'
+    if ! [[ $port =~ $re ]] ; then
+       echo "error: port '$port' is not a number" >&2
+       get_help
+    fi
+}
+
+function get_tun_ip {
+    ip -4 addr show ${tun_dev} | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || echo "${tun_dev} not connected ..."
+}
+
+function get_help {
+    echo
+    echo "[-] unknown server specified:"
+    echo "    choose from http, nc, smb, ftp, tftp, ssh, smtp"
+    echo
+    echo "usage: $0 server (optional: port)"
+    echo
+    echo "e.g. $0 http 8080"
+    exit 1
+}
+
+function run_srv {
+    exec $srv_cmd
+}
+
+# if not run as root, call again with sudo
+if [ "$EUID" -ne "0" ]; then
+     sudo $0 $*
+     exit
+fi
+
+# check # of arguments to avoid command injection
+if [ "$#" -gt 2  ]; then
+    echo "error: too many arguments"
+    get_help
+fi
+
+# get tun ip
+tun_ip=$(get_tun_ip)
+
+case $srv in
+
+  http)
+    port=${port:-80}	  
+    info="starting simple http server and delivering contents of current directory $(pwd)"
+    srv_cmd="python3 -m http.server ${port}"
+    ;;
+
+  nc)
+    info="starting nc listener..."
+    port=${port:-443}	  
+    srv_cmd="nc -nlvp ${port}"
+    ;;
+
+  smb)
+    info="starting simple smb server and delivering contents of current directory $(pwd) ..."
+    port=${port:-445}	  
+    srv_cmd="smbserver.py -port ${port} -smb2support smb ."
+    ;;
+
+  ftp)
+    info="starting simple ftp server and delivering contents of current directory $(pwd) ..."
+    port=${port:-21}	  
+    srv_cmd="python3 -m pyftpdlib -p ${port}"
+    ;;
+
+  tftp)
+    info="starting simple tftp server and delivering contents of current directory $(pwd) ..."
+    port=${port:-69}	  
+    srv_cmd="ptftpd -p ${port} tun0 ."
+    ;;
+
+  ssh)
+    info="starting sshd in foregroud with debug output ..."
+    port=${port:-22}	  
+    srv_cmd="/usr/sbin/sshd -p ${port} -D -e"
+    ;;
+
+  smtp)
+    info="starting simple smtp server and printing everything to stdout ..."
+    port=${port:-25}
+    srv_cmd="python3 -m smtpd -n -c DebuggingServer 0.0.0.0:${port}"
+    ;;
+
+  *)
+    get_help
+    ;;
+
+esac
+
+validate_port ${port}
+echo "[+] starting ${srv} listener on port ${port}"
+echo
+echo "[i] ${info}"
+echo "[i] ${tun_dev}: ${tun_ip}"
+echo
+echo "[c] ${srv_cmd}"
+echo
+run_srv
+
+exit 0
